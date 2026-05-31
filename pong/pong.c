@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
-
+//hellow
 /* ── window & layout ─────────────────────────────────── */
 #define SCREEN_W        1000
 #define SCREEN_H        600

@@ -1,0 +1,305 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans)}
+#root{padding:1rem 0;user-select:none}
+#top{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.algo-btn{font-size:12px;padding:5px 10px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:transparent;color:var(--color-text-secondary);cursor:pointer;transition:all .15s}
+.algo-btn:hover{background:var(--color-background-secondary)}
+.algo-btn.active{background:#185FA5;color:#E6F1FB;border-color:#185FA5}
+#controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+#controls label{font-size:13px;color:var(--color-text-secondary)}
+#controls input[type=range]{width:90px}
+#controls span{font-size:13px;font-weight:500;min-width:28px}
+.ctrl-btn{font-size:13px;padding:6px 16px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:transparent;color:var(--color-text-primary);cursor:pointer;transition:all .15s}
+.ctrl-btn:hover{background:var(--color-background-secondary)}
+.ctrl-btn.go{background:#185FA5;color:#E6F1FB;border-color:#185FA5}
+.ctrl-btn.go:hover{background:#0C447C}
+.ctrl-btn:disabled{opacity:.4;cursor:not-allowed}
+#canvas-wrap{border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);overflow:hidden;background:var(--color-background-primary)}
+canvas{display:block;width:100%;height:280px}
+#stats{display:flex;gap:16px;margin-top:8px;font-size:12px;color:var(--color-text-secondary)}
+#stats span b{color:var(--color-text-primary);font-weight:500}
+#algo-name{font-size:13px;font-weight:500;color:var(--color-text-primary);margin-bottom:6px}
+</style>
+<div id="root">
+<h2 class="sr-only">Interactive sorting algorithm visualizer with 10 algorithms</h2>
+<div id="algo-name">Bubble Sort</div>
+<div id="top">
+<button class="algo-btn active" data-algo="bubble">Bubble</button>
+<button class="algo-btn" data-algo="selection">Selection</button>
+<button class="algo-btn" data-algo="insertion">Insertion</button>
+<button class="algo-btn" data-algo="merge">Merge</button>
+<button class="algo-btn" data-algo="quick">Quick</button>
+<button class="algo-btn" data-algo="heap">Heap</button>
+<button class="algo-btn" data-algo="shell">Shell</button>
+<button class="algo-btn" data-algo="counting">Counting</button>
+<button class="algo-btn" data-algo="radix">Radix</button>
+<button class="algo-btn" data-algo="bucket">Bucket</button>
+</div>
+<div id="controls">
+<label>Size</label>
+<input type="range" id="sizeSlider" min="20" max="120" step="1" value="60">
+<span id="sizeVal">60</span>
+<label style="margin-left:8px">Speed</label>
+<input type="range" id="speedSlider" min="1" max="10" step="1" value="5">
+<span id="speedVal">5</span>
+<button class="ctrl-btn go" id="startBtn">Start</button>
+<button class="ctrl-btn" id="resetBtn">Reset</button>
+</div>
+<div id="canvas-wrap"><canvas id="c"></canvas></div>
+<div id="stats">
+<span>Comparisons: <b id="cmpCount">0</b></span>
+<span>Swaps/Writes: <b id="swpCount">0</b></span>
+<span id="doneMsg"></span>
+</div>
+</div>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  W = canvas.width = rect.width * devicePixelRatio;
+  H = canvas.height = rect.height * devicePixelRatio;
+}
+window.addEventListener('resize', () => { resize(); draw(); });
+resize();
+
+let N = 60, arr = [], highlights = {}, comparing = [], sorted = [], algo = 'bubble';
+let running = false, animId = null, genFn = null, lastTime = 0, speed = 5;
+let cmps = 0, swps = 0;
+
+const algoNames = {bubble:'Bubble Sort',selection:'Selection Sort',insertion:'Insertion Sort',merge:'Merge Sort',quick:'Quick Sort',heap:'Heap Sort',shell:'Shell Sort',counting:'Counting Sort',radix:'Radix Sort',bucket:'Bucket Sort'};
+
+function randArr(n) {
+  const a = Array.from({length:n},(_,i)=>i+1);
+  for(let i=n-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+  return a;
+}
+
+function isDark(){return window.matchMedia('(prefers-color-scheme:dark)').matches;}
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  const dark = isDark();
+  const barW = W / arr.length;
+  const maxV = Math.max(...arr, 1);
+  for(let i=0;i<arr.length;i++){
+    const bh = (arr[i]/maxV)*(H*0.94);
+    let color;
+    if(sorted.includes(i)) color = dark?'#1D9E75':'#0F6E56';
+    else if(highlights[i]==='pivot') color = '#EF9F27';
+    else if(highlights[i]==='compare') color = dark?'#85B7EB':'#185FA5';
+    else if(highlights[i]==='swap') color = dark?'#F09595':'#A32D2D';
+    else if(highlights[i]==='active') color = dark?'#F4C0D1':'#993556';
+    else color = dark?'#444441':'#B4B2A9';
+    ctx.fillStyle = color;
+    const x = i*barW, y = H-bh;
+    ctx.fillRect(x+1, y, Math.max(barW-2,1), bh);
+  }
+}
+
+function setHighlight(obj){ highlights=obj; }
+function sleep(){} // replaced by generator yields
+
+function* bubbleSort(){
+  let n=arr.length;
+  for(let i=0;i<n-1;i++){
+    for(let j=0;j<n-1-i;j++){
+      setHighlight({[j]:'compare',[j+1]:'compare'}); cmps++;
+      yield;
+      if(arr[j]>arr[j+1]){[arr[j],arr[j+1]]=[arr[j+1],arr[j]];swps++;setHighlight({[j]:'swap',[j+1]:'swap'});yield;}
+    }
+    sorted.push(n-1-i);
+  }
+  sorted.push(0);
+}
+
+function* selectionSort(){
+  let n=arr.length;
+  for(let i=0;i<n-1;i++){
+    let minIdx=i; setHighlight({[i]:'active'});
+    for(let j=i+1;j<n;j++){cmps++;setHighlight({[i]:'active',[j]:'compare',[minIdx]:'pivot'});yield;if(arr[j]<arr[minIdx])minIdx=j;}
+    if(minIdx!==i){[arr[i],arr[minIdx]]=[arr[minIdx],arr[i]];swps++;setHighlight({[i]:'swap',[minIdx]:'swap'});yield;}
+    sorted.push(i);
+  }
+  sorted.push(n-1);
+}
+
+function* insertionSort(){
+  let n=arr.length; sorted.push(0);
+  for(let i=1;i<n;i++){
+    let key=arr[i],j=i-1; setHighlight({[i]:'active'}); yield;
+    while(j>=0&&arr[j]>key){cmps++;swps++;arr[j+1]=arr[j];setHighlight({[j]:'compare',[j+1]:'swap'});yield;j--;}
+    arr[j+1]=key;swps++; sorted.push(i);
+  }
+}
+
+function* mergeSort(){
+  const aux=[...arr];
+  function* ms(lo,hi){
+    if(lo>=hi)return;
+    const mid=Math.floor((lo+hi)/2);
+    yield* ms(lo,mid); yield* ms(mid+1,hi);
+    let i=lo,j=mid+1,k=lo;
+    while(i<=mid&&j<=hi){cmps++;setHighlight({[i]:'compare',[j]:'compare'});yield;if(aux[i]<=aux[j])arr[k++]=aux[i++];else arr[k++]=aux[j++];swps++;}
+    while(i<=mid)arr[k++]=aux[i++];
+    while(j<=hi)arr[k++]=aux[j++];
+    for(let x=lo;x<=hi;x++)aux[x]=arr[x];
+    const h={};for(let x=lo;x<=hi;x++)h[x]='active'; setHighlight(h); yield;
+    if(lo===0&&hi===arr.length-1)for(let x=0;x<arr.length;x++)sorted.push(x);
+  }
+  yield* ms(0,arr.length-1);
+}
+
+function* quickSort(){
+  function* qs(lo,hi){
+    if(lo>=hi){if(lo===hi)sorted.push(lo);return;}
+    let pivot=arr[hi],i=lo-1;
+    setHighlight({[hi]:'pivot'});
+    for(let j=lo;j<hi;j++){cmps++;setHighlight({[j]:'compare',[hi]:'pivot'});yield;if(arr[j]<=pivot){i++;[arr[i],arr[j]]=[arr[j],arr[i]];swps++;setHighlight({[i]:'swap',[j]:'swap',[hi]:'pivot'});yield;}}
+    [arr[i+1],arr[hi]]=[arr[hi],arr[i+1]];swps++;sorted.push(i+1);setHighlight({[i+1]:'pivot'});yield;
+    yield* qs(lo,i); yield* qs(i+2,hi);
+  }
+  yield* qs(0,arr.length-1);
+}
+
+function* heapSort(){
+  let n=arr.length;
+  function* heapify(n,i){
+    let largest=i,l=2*i+1,r=2*i+2;
+    cmps++;setHighlight({[i]:'active',[l]:'compare',[r]:'compare'});yield;
+    if(l<n&&arr[l]>arr[largest])largest=l;
+    if(r<n&&arr[r]>arr[largest])largest=r;
+    if(largest!==i){[arr[i],arr[largest]]=[arr[largest],arr[i]];swps++;setHighlight({[i]:'swap',[largest]:'swap'});yield;yield* heapify(n,largest);}
+  }
+  for(let i=Math.floor(n/2)-1;i>=0;i--)yield* heapify(n,i);
+  for(let i=n-1;i>0;i--){[arr[0],arr[i]]=[arr[i],arr[0]];swps++;sorted.push(i);yield* heapify(i,0);}
+  sorted.push(0);
+}
+
+function* shellSort(){
+  let n=arr.length;
+  for(let gap=Math.floor(n/2);gap>0;gap=Math.floor(gap/2)){
+    for(let i=gap;i<n;i++){
+      let temp=arr[i],j=i;
+      setHighlight({[i]:'active'});yield;
+      while(j>=gap&&arr[j-gap]>temp){cmps++;swps++;arr[j]=arr[j-gap];setHighlight({[j]:'swap',[j-gap]:'compare'});yield;j-=gap;}
+      arr[j]=temp;swps++;
+    }
+  }
+  for(let i=0;i<arr.length;i++)sorted.push(i);
+}
+
+function* countingSort(){
+  let n=arr.length,max=Math.max(...arr);
+  let count=new Array(max+1).fill(0);
+  for(let i=0;i<n;i++){count[arr[i]]++;cmps++;setHighlight({[i]:'compare'});yield;}
+  let out=[],k=0;
+  for(let v=1;v<=max;v++){while(count[v]-->0){arr[k]=v;swps++;setHighlight({[k]:'active'});yield;sorted.push(k);k++;}}
+}
+
+function* radixSort(){
+  let n=arr.length,max=Math.max(...arr),exp=1;
+  while(Math.floor(max/exp)>0){
+    let out=new Array(n),cnt=new Array(10).fill(0);
+    for(let i=0;i<n;i++){cnt[Math.floor(arr[i]/exp)%10]++;cmps++;setHighlight({[i]:'compare'});yield;}
+    for(let i=1;i<10;i++)cnt[i]+=cnt[i-1];
+    for(let i=n-1;i>=0;i--){out[--cnt[Math.floor(arr[i]/exp)%10]]=arr[i];swps++;}
+    for(let i=0;i<n;i++){arr[i]=out[i];setHighlight({[i]:'active'});yield;}
+    exp*=10;
+  }
+  for(let i=0;i<arr.length;i++)sorted.push(i);
+}
+
+function* bucketSort(){
+  let n=arr.length,max=Math.max(...arr)+1;
+  let buckets=Array.from({length:10},()=>[]);
+  for(let i=0;i<n;i++){let b=Math.floor(arr[i]/max*10);buckets[b].push(arr[i]);cmps++;setHighlight({[i]:'compare'});yield;}
+  for(let b=0;b<10;b++)buckets[b].sort((a,c)=>a-c);
+  let k=0;
+  for(let b=0;b<10;b++)for(let v of buckets[b]){arr[k]=v;swps++;setHighlight({[k]:'active'});yield;sorted.push(k);k++;}
+}
+
+const generators = {bubble:bubbleSort,selection:selectionSort,insertion:insertionSort,merge:mergeSort,quick:quickSort,heap:heapSort,shell:shellSort,counting:countingSort,radix:radixSort,bucket:bucketSort};
+
+function speedToDelay(s){
+  const map=[0,30,20,12,8,5,3,2,1,0.5,0];
+  return map[s]||5;
+}
+
+function reset(){
+  running=false; cancelAnimationFrame(animId); genFn=null;
+  highlights={}; sorted=[]; comparing=[]; cmps=0; swps=0;
+  arr=randArr(N);
+  document.getElementById('cmpCount').textContent='0';
+  document.getElementById('swpCount').textContent='0';
+  document.getElementById('doneMsg').textContent='';
+  document.getElementById('startBtn').disabled=false;
+  document.getElementById('startBtn').textContent='Start';
+  draw();
+}
+
+let accumulated=0;
+function step(ts){
+  const delay=speedToDelay(speed);
+  const dt=ts-lastTime; lastTime=ts;
+  accumulated+=dt;
+  const stepsPerFrame=delay===0?20:1;
+  let count=0;
+  while(count<stepsPerFrame){
+    const r=genFn.next();
+    count++;
+    if(r.done){
+      highlights={}; sorted=Array.from({length:arr.length},(_,i)=>i);
+      draw();
+      running=false;
+      document.getElementById('doneMsg').textContent='✓ Sorted!';
+      document.getElementById('startBtn').textContent='Start';
+      document.getElementById('startBtn').disabled=false;
+      return;
+    }
+    if(delay>0)break;
+  }
+  document.getElementById('cmpCount').textContent=cmps;
+  document.getElementById('swpCount').textContent=swps;
+  draw();
+  if(accumulated>=delay||delay===0){accumulated=0;animId=requestAnimationFrame(step);}
+  else animId=requestAnimationFrame(step);
+}
+
+document.getElementById('startBtn').addEventListener('click',()=>{
+  if(running)return;
+  running=true; sorted=[]; highlights={}; cmps=0; swps=0;
+  document.getElementById('doneMsg').textContent='';
+  document.getElementById('startBtn').disabled=true;
+  genFn=generators[algo]();
+  lastTime=performance.now(); accumulated=0;
+  animId=requestAnimationFrame(step);
+});
+
+document.getElementById('resetBtn').addEventListener('click',reset);
+
+document.querySelectorAll('.algo-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    if(running)return;
+    document.querySelectorAll('.algo-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    algo=btn.dataset.algo;
+    document.getElementById('algo-name').textContent=algoNames[algo];
+    reset();
+  });
+});
+
+document.getElementById('sizeSlider').addEventListener('input',function(){
+  if(running)return;
+  N=+this.value; document.getElementById('sizeVal').textContent=N; reset();
+});
+
+document.getElementById('speedSlider').addEventListener('input',function(){
+  speed=+this.value; document.getElementById('speedVal').textContent=speed;
+});
+
+reset();
+</script>

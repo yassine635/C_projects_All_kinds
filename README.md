@@ -132,22 +132,7 @@ gcc main.c -o program
 
 *Compilation instructions may vary depending on the specific project.*
 
----
 
-## 📂 Repository Structure
-
-```text
-C_projects_All_kinds/
-│
-├── Project_1/
-├── Project_2/
-├── Algorithms/
-├── Games/
-├── Utilities/
-└── README.md
-```
-
----
 
 ## 📈 Purpose of This Repository
 

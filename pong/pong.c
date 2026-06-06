@@ -1,14 +1,16 @@
-
-
 #include "raylib.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
-//hellow
-/* ── window & layout ─────────────────────────────────── */
-#define SCREEN_W        1000
-#define SCREEN_H        600
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+/* ── updated window & layout matching web canvas boundaries ──────────────── */
+#define SCREEN_W        800
+#define SCREEN_H        500
 #define TARGET_FPS      60
 
 /* ── gameplay constants ──────────────────────────────── */
@@ -27,42 +29,42 @@
 typedef struct {
     Vector2 pos;
     Vector2 vel;
-    float   life;       /* 0..1, counts down */
+    float   life;       
     float   size;
     Color   color;
     bool    active;
 } Particle;
 
+/* ── difficulty levels ───────────────────────────────── */
+typedef enum { DIFF_EASY, DIFF_NORMAL, DIFF_HARD } Difficulty;
+
 /* ── game state ──────────────────────────────────────── */
 typedef enum { STATE_MENU, STATE_PLAYING, STATE_PAUSED, STATE_WIN } GameState;
 
 typedef struct {
-    /* paddles */
     Rectangle p1, p2;
-    /* ball */
     Vector2   ball;
     Vector2   ballVel;
-    float     ballAngle;    /* visual spin angle */
-    /* scores */
+    float     ballAngle;    
     int       score1, score2;
-    /* state */
     GameState state;
-    int       winner;       /* 1 or 2 */
-    /* flash / shake */
+    int       winner;       
     float     flashTimer;
     float     shakeTimer;
-    /* trail */
     Vector2   trail[20];
     int       trailIdx;
-    /* particles */
     Particle  particles[MAX_PARTICLES];
-    /* countdown before serve */
     float     serveTimer;
     bool      serving;
+    Difficulty difficulty;
 } Game;
 
+// Global variables for Emscripten frame loop compatibility
+Game g = {0};
+RenderTexture2D screen;
+
 /* ──────────────────────────────────────────────────────
-   HELPERS
+   HELPERS / LOGIC
    ────────────────────────────────────────────────────── */
 
 static void SpawnParticles(Game *g, Vector2 pos, Color base, int count)
@@ -108,7 +110,6 @@ static void DrawParticles(const Game *g)
     }
 }
 
-/* push ball position into trail ring buffer */
 static void PushTrail(Game *g)
 {
     g->trail[g->trailIdx] = g->ball;
@@ -126,14 +127,41 @@ static void DrawTrail(const Game *g)
     }
 }
 
-/* ──────────────────────────────────────────────────────
-   INIT / RESET
-   ────────────────────────────────────────────────────── */
+/* ── BOT MOVEMENT ── */
+static void UpdateBot(Game *g, float dt)
+{
+    float botSpeed = PADDLE_SPEED;
+    float targetY = g->ball.y - g->p2.height / 2.0f;
+    
+    switch (g->difficulty) {
+        case DIFF_EASY:
+            botSpeed *= 0.45f;      
+            if ((rand() % 60) < 2) targetY += (rand() % 60) - 30;
+            break;
+        case DIFF_NORMAL:
+            botSpeed *= 0.85f;      
+            break;
+        case DIFF_HARD:
+            botSpeed *= 1.4f;       
+            targetY = g->ball.y + g->ballVel.y * 0.2f - g->p2.height / 2.0f;
+            break;
+    }
+    
+    if (g->p2.y < targetY) {
+        g->p2.y += botSpeed * dt;
+        if (g->p2.y > targetY) g->p2.y = targetY;
+    } else if (g->p2.y > targetY) {
+        g->p2.y -= botSpeed * dt;
+        if (g->p2.y < targetY) g->p2.y = targetY;
+    }
+    
+    if (g->p2.y < 0) g->p2.y = 0;
+    if (g->p2.y + g->p2.height > SCREEN_H) g->p2.y = SCREEN_H - g->p2.height;
+}
 
 static void ResetBall(Game *g, int towardsPlayer)
 {
     g->ball = (Vector2){ SCREEN_W / 2.0f, SCREEN_H / 2.0f };
-    /* serve towards the player who just lost the point */
     float dir = (towardsPlayer == 2) ? 1.0f : -1.0f;
     float angle = ((float)(rand() % 60) - 30.0f) * DEG2RAD;
     g->ballVel = (Vector2){
@@ -148,8 +176,7 @@ static void ResetBall(Game *g, int towardsPlayer)
 static void InitGame(Game *g)
 {
     g->p1 = (Rectangle){ 30, SCREEN_H/2.0f - PADDLE_H/2.0f, PADDLE_W, PADDLE_H };
-    g->p2 = (Rectangle){ SCREEN_W - 30 - PADDLE_W,
-                         SCREEN_H/2.0f - PADDLE_H/2.0f, PADDLE_W, PADDLE_H };
+    g->p2 = (Rectangle){ SCREEN_W - 30 - PADDLE_W, SCREEN_H/2.0f - PADDLE_H/2.0f, PADDLE_W, PADDLE_H };
     g->score1    = 0;
     g->score2    = 0;
     g->winner    = 0;
@@ -162,10 +189,6 @@ static void InitGame(Game *g)
     g->state = STATE_PLAYING;
 }
 
-/* ──────────────────────────────────────────────────────
-   UPDATE
-   ────────────────────────────────────────────────────── */
-
 static void UpdateGame(Game *g, float dt)
 {
     if (g->state == STATE_PAUSED) {
@@ -177,35 +200,29 @@ static void UpdateGame(Game *g, float dt)
         return;
     }
 
-    /* ─ pause ─ */
     if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) {
         g->state = STATE_PAUSED;
         return;
     }
 
-    /* ─ serve countdown ─ */
     if (g->serving) {
         g->serveTimer -= dt;
         if (g->serveTimer <= 0) g->serving = false;
-        /* paddles still move during countdown */
     }
 
-    /* ─ paddle movement ─ */
     float move = PADDLE_SPEED * dt;
     if (IsKeyDown(KEY_W) && g->p1.y > 0)               g->p1.y -= move;
     if (IsKeyDown(KEY_S) && g->p1.y + g->p1.height < SCREEN_H) g->p1.y += move;
-    if (IsKeyDown(KEY_UP)   && g->p2.y > 0)             g->p2.y -= move;
-    if (IsKeyDown(KEY_DOWN) && g->p2.y + g->p2.height < SCREEN_H) g->p2.y += move;
 
-    if (g->serving) return;   /* ball frozen during serve countdown */
+    UpdateBot(g, dt);
 
-    /* ─ ball movement ─ */
+    if (g->serving) return;   
+
     PushTrail(g);
     g->ball.x += g->ballVel.x * dt;
     g->ball.y += g->ballVel.y * dt;
-    g->ballAngle += 180.0f * dt;   /* visual spin */
+    g->ballAngle += 180.0f * dt;   
 
-    /* ─ top / bottom walls ─ */
     if (g->ball.y - BALL_SIZE/2.0f <= 0) {
         g->ball.y = BALL_SIZE/2.0f;
         g->ballVel.y = fabsf(g->ballVel.y);
@@ -217,20 +234,12 @@ static void UpdateGame(Game *g, float dt)
         SpawnParticles(g, g->ball, WHITE, 8);
     }
 
-    /* ─ paddle collision helper ─ */
-    /* returns relative hit position -1..1 */
-    Rectangle ballRect = {
-        g->ball.x - BALL_SIZE/2.0f,
-        g->ball.y - BALL_SIZE/2.0f,
-        (float)BALL_SIZE, (float)BALL_SIZE
-    };
+    Rectangle ballRect = { g->ball.x - BALL_SIZE/2.0f, g->ball.y - BALL_SIZE/2.0f, (float)BALL_SIZE, (float)BALL_SIZE };
 
-    /* P1 (left) */
     if (CheckCollisionRecs(ballRect, g->p1) && g->ballVel.x < 0) {
         float rel = (g->ball.y - (g->p1.y + g->p1.height/2.0f)) / (g->p1.height/2.0f);
         float bounceAngle = rel * 60.0f * DEG2RAD;
-        float spd = fminf(sqrtf(g->ballVel.x*g->ballVel.x + g->ballVel.y*g->ballVel.y)
-                          + BALL_SPEEDUP, BALL_MAX_SPEED);
+        float spd = fminf(sqrtf(g->ballVel.x*g->ballVel.x + g->ballVel.y*g->ballVel.y) + BALL_SPEEDUP, BALL_MAX_SPEED);
         g->ballVel.x =  cosf(bounceAngle) * spd;
         g->ballVel.y =  sinf(bounceAngle) * spd;
         g->ball.x = g->p1.x + g->p1.width + BALL_SIZE/2.0f + 1;
@@ -239,12 +248,10 @@ static void UpdateGame(Game *g, float dt)
         SpawnParticles(g, g->ball, (Color){0,220,255,255}, 22);
     }
 
-    /* P2 (right) */
     if (CheckCollisionRecs(ballRect, g->p2) && g->ballVel.x > 0) {
         float rel = (g->ball.y - (g->p2.y + g->p2.height/2.0f)) / (g->p2.height/2.0f);
         float bounceAngle = rel * 60.0f * DEG2RAD;
-        float spd = fminf(sqrtf(g->ballVel.x*g->ballVel.x + g->ballVel.y*g->ballVel.y)
-                          + BALL_SPEEDUP, BALL_MAX_SPEED);
+        float spd = fminf(sqrtf(g->ballVel.x*g->ballVel.x + g->ballVel.y*g->ballVel.y) + BALL_SPEEDUP, BALL_MAX_SPEED);
         g->ballVel.x = -cosf(bounceAngle) * spd;
         g->ballVel.y =  sinf(bounceAngle) * spd;
         g->ball.x = g->p2.x - BALL_SIZE/2.0f - 1;
@@ -253,7 +260,6 @@ static void UpdateGame(Game *g, float dt)
         SpawnParticles(g, g->ball, (Color){255,80,120,255}, 22);
     }
 
-    /* ─ scoring ─ */
     if (g->ball.x < -BALL_SIZE) {
         g->score2++;
         SpawnParticles(g, (Vector2){0, g->ball.y}, (Color){255,80,120,255}, 40);
@@ -269,31 +275,22 @@ static void UpdateGame(Game *g, float dt)
         else ResetBall(g, 1);
     }
 
-    /* ─ timers ─ */
     if (g->flashTimer > 0) g->flashTimer -= dt;
     if (g->shakeTimer > 0) g->shakeTimer -= dt;
     UpdateParticles(g, dt);
 }
 
-/* ──────────────────────────────────────────────────────
-   DRAW
-   ────────────────────────────────────────────────────── */
-
-/* draw a neon glowing rectangle */
+/* ── DRAW CORES ── */
 static void DrawNeonRect(Rectangle r, Color col, int glowLayers)
 {
     for (int i = glowLayers; i >= 0; i--) {
         Color gc = col;
         gc.a = (i == 0) ? 255 : (unsigned char)(40 - i*4);
         float expand = (float)i * 3.0f;
-        DrawRectangleRec(
-            (Rectangle){ r.x-expand, r.y-expand,
-                         r.width+expand*2, r.height+expand*2 },
-            gc);
+        DrawRectangleRec((Rectangle){ r.x-expand, r.y-expand, r.width+expand*2, r.height+expand*2 }, gc);
     }
 }
 
-/* draw a glowing circle */
 static void DrawNeonCircle(Vector2 c, float r, Color col, int glowLayers)
 {
     for (int i = glowLayers; i >= 0; i--) {
@@ -314,14 +311,12 @@ static void DrawDashedLine(void)
     }
 }
 
-/* big glowing digit score */
 static void DrawScore(int score, int cx, int cy, Color col)
 {
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", score);
     int fontSize = 90;
     int tw = MeasureText(buf, fontSize);
-    /* glow layers */
     for (int i = 4; i >= 0; i--) {
         Color gc = col;
         gc.a = (i == 0) ? 220 : (unsigned char)(25 - i*4);
@@ -331,59 +326,60 @@ static void DrawScore(int score, int cx, int cy, Color col)
     DrawText(buf, cx - tw/2, cy, fontSize, col);
 }
 
-static void DrawMenu(void)
+static void DrawMenu(Game *g)
 {
-    /* background glow circles */
     DrawCircle(SCREEN_W/2, SCREEN_H/2, 220, (Color){0,180,255,18});
     DrawCircle(SCREEN_W/2, SCREEN_H/2, 150, (Color){0,180,255,14});
 
-    /* title */
     const char *title = "PONG";
     int tsz = 120;
     int tw  = MeasureText(title, tsz);
-    /* cyan glow */
     for (int i = 6; i >= 0; i--) {
         Color gc = { 0, 220, 255, (unsigned char)(20 - i*2) };
         DrawText(title, SCREEN_W/2 - tw/2 - i, 120 - i, tsz, gc);
         DrawText(title, SCREEN_W/2 - tw/2 + i, 120 + i, tsz, gc);
     }
     DrawText(title, SCREEN_W/2 - tw/2, 120, tsz, (Color){0,220,255,255});
+    DrawText("A CLASSIC REIMAGINED", SCREEN_W/2 - MeasureText("A CLASSIC REIMAGINED",18)/2, 255, 18, (Color){255,255,255,120});
 
-    /* subtitle */
-    DrawText("A CLASSIC REIMAGINED", SCREEN_W/2 - MeasureText("A CLASSIC REIMAGINED",18)/2,
-             255, 18, (Color){255,255,255,120});
-
-    /* controls box */
     DrawRectangle(SCREEN_W/2 - 300, 300, 600, 170, (Color){255,255,255,10});
     DrawRectangleLines(SCREEN_W/2 - 300, 300, 600, 170, (Color){255,255,255,40});
+    DrawText("DIFFICULTY", SCREEN_W/2 - MeasureText("DIFFICULTY",22)/2, 320, 22, WHITE);
 
-    DrawText("PLAYER 1",  SCREEN_W/2 - 260, 320, 22, (Color){0,220,255,200});
-    DrawText("W  /  S  to move", SCREEN_W/2 - 260, 350, 18, WHITE);
+    const char *easyText   = "1  -  EASY     (slow bot)";
+    const char *normalText = "2  -  NORMAL   (balanced)";
+    const char *hardText   = "3  -  HARD     (fast bot)";
 
-    DrawText("PLAYER 2",  SCREEN_W/2 + 60,  320, 22, (Color){255,80,120,200});
-    DrawText("UP / DOWN  to move", SCREEN_W/2 + 60, 350, 18, WHITE);
+    Color easyCol   = (g->difficulty == DIFF_EASY)   ? (Color){0,220,255,255} : WHITE;
+    Color normalCol = (g->difficulty == DIFF_NORMAL) ? (Color){0,220,255,255} : WHITE;
+    Color hardCol   = (g->difficulty == DIFF_HARD)   ? (Color){0,220,255,255} : WHITE;
 
-    DrawText("First to 7 points wins", SCREEN_W/2 - MeasureText("First to 7 points wins",16)/2,
-             420, 16, (Color){255,255,255,110});
+    DrawText(easyText,   SCREEN_W/2 - 180, 360, 18, easyCol);
+    DrawText(normalText, SCREEN_W/2 - 180, 390, 18, normalCol);
+    DrawText(hardText,   SCREEN_W/2 - 180, 420, 18, hardCol);
 
-    /* press enter */
     float pulse = (sinf((float)GetTime()*3.0f)+1.0f)*0.5f;
     Color pc = { 255,255,255, (unsigned char)(100 + pulse*155) };
-    const char *prompt = "PRESS  ENTER  TO  START";
-    DrawText(prompt, SCREEN_W/2 - MeasureText(prompt,22)/2, 510, 22, pc);
+    DrawText("PRESS  ENTER  TO  START", SCREEN_W/2 - MeasureText("PRESS  ENTER  TO  START",22)/2, 510, 22, pc);
 }
 
 static void DrawHUD(const Game *g)
 {
-    /* player labels */
-    DrawText("P1", 55, 14, 18, (Color){0,220,255,150});
-    DrawText("P2", SCREEN_W - 55 - MeasureText("P2",18), 14, 18, (Color){255,80,120,150});
+    DrawText("PLAYER", 55, 14, 18, (Color){0,220,255,150});
+    DrawText("BOT", SCREEN_W - 55 - MeasureText("BOT",18), 14, 18, (Color){255,80,120,150});
 
-    /* scores */
+    const char *difText = "";
+    Color difColor = (Color){255,255,255,100};
+    switch (g->difficulty) {
+        case DIFF_EASY:   difText = "EASY";   difColor = (Color){100,255,100,180}; break;
+        case DIFF_NORMAL: difText = "NORMAL"; difColor = (Color){255,255,100,180}; break;
+        case DIFF_HARD:   difText = "HARD";   difColor = (Color){255,100,100,180}; break;
+    }
+    DrawText(difText, SCREEN_W/2 - MeasureText(difText,14)/2, 10, 14, difColor);
+
     DrawScore(g->score1, SCREEN_W/4,     14, (Color){0,220,255,255});
     DrawScore(g->score2, SCREEN_W*3/4,   14, (Color){255,80,120,255});
 
-    /* score-to-win dots */
     for (int i = 0; i < SCORE_TO_WIN; i++) {
         Color fc = (i < g->score1) ? (Color){0,220,255,255} : (Color){255,255,255,40};
         DrawCircle(SCREEN_W/4 - (SCORE_TO_WIN*14)/2 + i*14 + 7, 122, 5, fc);
@@ -393,31 +389,22 @@ static void DrawHUD(const Game *g)
         DrawCircle(SCREEN_W*3/4 - (SCORE_TO_WIN*14)/2 + i*14 + 7, 122, 5, fc);
     }
 
-    /* serve countdown */
     if (g->serving) {
         int cnt = (int)(g->serveTimer) + 1;
         char buf[4];
         snprintf(buf, sizeof(buf), "%d", cnt);
         float pulse = (sinf((float)GetTime()*6.0f)+1.0f)*0.5f;
         Color pc = {255,255,255,(unsigned char)(150+pulse*105)};
-        int tsz = 60;
-        DrawText(buf, SCREEN_W/2 - MeasureText(buf,tsz)/2, SCREEN_H/2 - 30, tsz, pc);
+        DrawText(buf, SCREEN_W/2 - MeasureText(buf,60)/2, SCREEN_H/2 - 30, 60, pc);
     }
-
-    /* pause hint */
-    DrawText("P = Pause", SCREEN_W/2 - MeasureText("P = Pause",14)/2,
-             SCREEN_H - 22, 14, (Color){255,255,255,50});
+    DrawText("P = Pause", SCREEN_W/2 - MeasureText("P = Pause",14)/2, SCREEN_H - 22, 14, (Color){255,255,255,50});
 }
 
 static void DrawPauseOverlay(void)
 {
     DrawRectangle(0, 0, SCREEN_W, SCREEN_H, (Color){0,0,0,140});
-    const char *t = "PAUSED";
-    int tsz = 80;
-    DrawText(t, SCREEN_W/2 - MeasureText(t,tsz)/2, SCREEN_H/2 - 60, tsz, WHITE);
-    const char *sub = "Press  P  to resume";
-    DrawText(sub, SCREEN_W/2 - MeasureText(sub,22)/2, SCREEN_H/2 + 40, 22,
-             (Color){255,255,255,160});
+    DrawText("PAUSED", SCREEN_W/2 - MeasureText("PAUSED",80)/2, SCREEN_H/2 - 60, 80, WHITE);
+    DrawText("Press  P  to resume", SCREEN_W/2 - MeasureText("Press  P  to resume",22)/2, SCREEN_H/2 + 40, 22, (Color){255,255,255,160});
 }
 
 static void DrawWinScreen(const Game *g)
@@ -425,10 +412,9 @@ static void DrawWinScreen(const Game *g)
     DrawRectangle(0, 0, SCREEN_W, SCREEN_H, (Color){0,0,0,160});
     Color wc = (g->winner == 1) ? (Color){0,220,255,255} : (Color){255,80,120,255};
     char buf[32];
-    snprintf(buf, sizeof(buf), "PLAYER  %d  WINS!", g->winner);
+    snprintf(buf, sizeof(buf), g->winner == 1 ? "YOU WIN!" : "BOT WINS!");
     int tsz = 70;
     int tw  = MeasureText(buf, tsz);
-    /* glow */
     for (int i = 5; i >= 0; i--) {
         Color gc = wc; gc.a = (unsigned char)(20 - i*3);
         DrawText(buf, SCREEN_W/2-tw/2-i, SCREEN_H/2-80-i, tsz, gc);
@@ -436,125 +422,97 @@ static void DrawWinScreen(const Game *g)
     }
     DrawText(buf, SCREEN_W/2-tw/2, SCREEN_H/2-80, tsz, wc);
 
-    /* final scores */
     char sb[24];
     snprintf(sb, sizeof(sb), "%d  —  %d", g->score1, g->score2);
-    int ssz = 42;
-    DrawText(sb, SCREEN_W/2 - MeasureText(sb,ssz)/2, SCREEN_H/2 + 10, ssz, WHITE);
+    DrawText(sb, SCREEN_W/2 - MeasureText(sb,42)/2, SCREEN_H/2 + 10, 42, WHITE);
 
     float pulse = (sinf((float)GetTime()*3.0f)+1.0f)*0.5f;
     Color pc = {255,255,255,(unsigned char)(100+pulse*155)};
-    const char *restart = "Press  ENTER  to play again";
-    DrawText(restart, SCREEN_W/2 - MeasureText(restart,20)/2, SCREEN_H/2+100, 20, pc);
+    DrawText("Press  ENTER  to play again", SCREEN_W/2 - MeasureText("Press  ENTER  to play again",20)/2, SCREEN_H/2+100, 20, pc);
 }
 
-/* ──────────────────────────────────────────────────────
-   MAIN
-   ────────────────────────────────────────────────────── */
+/* ── Web Assembly Frame Loop Wrapper Context ── */
+void GameUpdateFrame(void)
+{
+    float dt = GetFrameTime();
+    if (dt > 0.05f) dt = 0.05f;
+
+    if (g.state == STATE_MENU) {
+        if (IsKeyPressed(KEY_ONE) || IsKeyPressed(KEY_KP_1)) g.difficulty = DIFF_EASY;
+        if (IsKeyPressed(KEY_TWO) || IsKeyPressed(KEY_KP_2)) g.difficulty = DIFF_NORMAL;
+        if (IsKeyPressed(KEY_THREE) || IsKeyPressed(KEY_KP_3)) g.difficulty = DIFF_HARD;
+        if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) InitGame(&g);
+    } else {
+        UpdateGame(&g, dt);
+    }
+
+    BeginTextureMode(screen);
+        ClearBackground((Color){8, 8, 18, 255});
+
+        if (g.state == STATE_MENU) {
+            DrawMenu(&g);
+        } else {
+            for (int x = 0; x < SCREEN_W; x += 60) DrawLine(x, 0, x, SCREEN_H, (Color){255,255,255,8});
+            for (int y = 0; y < SCREEN_H; y += 60) DrawLine(0, y, SCREEN_W, y, (Color){255,255,255,8});
+
+            DrawDashedLine();
+            DrawRectangleLinesEx((Rectangle){0,0,SCREEN_W,SCREEN_H}, 3, (Color){255,255,255,40});
+            DrawRectangleLinesEx((Rectangle){2,2,SCREEN_W-4,SCREEN_H-4}, 1, (Color){255,255,255,15});
+
+            if (g.flashTimer > 0) {
+                float t = g.flashTimer / 0.08f;
+                DrawRectangle(0,0,SCREEN_W,SCREEN_H, (Color){255,255,255,(unsigned char)(t*35)});
+            }
+
+            DrawTrail(&g);
+            DrawNeonCircle(g.ball, BALL_SIZE/2.0f, (Color){0,220,255,255}, 6);
+            DrawNeonRect(g.p1, (Color){0,220,255,255},  7);
+            DrawNeonRect(g.p2, (Color){255,80,120,255}, 7);
+
+            DrawCircle((int)(g.p1.x + g.p1.width/2), (int)(g.p1.y), (int)(g.p1.width/2), (Color){0,220,255,255});
+            DrawCircle((int)(g.p1.x + g.p1.width/2), (int)(g.p1.y + g.p1.height), (int)(g.p1.width/2), (Color){0,220,255,255});
+            DrawCircle((int)(g.p2.x + g.p2.width/2), (int)(g.p2.y), (int)(g.p2.width/2), (Color){255,80,120,255});
+            DrawCircle((int)(g.p2.x + g.p2.width/2), (int)(g.p2.y + g.p2.height), (int)(g.p2.width/2), (Color){255,80,120,255});
+
+            DrawParticles(&g);
+            DrawHUD(&g);
+
+            if (g.state == STATE_PAUSED) DrawPauseOverlay();
+            if (g.state == STATE_WIN)    DrawWinScreen(&g);
+        }
+    EndTextureMode();
+
+    BeginDrawing();
+        ClearBackground(BLACK);
+        float ox = 0, oy = 0;
+        if (g.shakeTimer > 0) {
+            float mag = (g.shakeTimer / 0.3f) * 7.0f;
+            ox = (float)(rand() % (int)(mag*2+1)) - mag;
+            oy = (float)(rand() % (int)(mag*2+1)) - mag;
+        }
+        DrawTextureRec(screen.texture, (Rectangle){0, 0, (float)SCREEN_W, -(float)SCREEN_H}, (Vector2){ox, oy}, WHITE);
+    EndDrawing();
+}
 
 int main(void)
 {
     srand((unsigned)time(NULL));
-
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
-    InitWindow(SCREEN_W, SCREEN_H, "PONG  —  raylib");
-    SetTargetFPS(TARGET_FPS);
+    InitWindow(SCREEN_W, SCREEN_H, "PONG");
 
-    /* ── render texture for screen-shake ── */
-    RenderTexture2D screen = LoadRenderTexture(SCREEN_W, SCREEN_H);
-
-    Game g = {0};
+    screen = LoadRenderTexture(SCREEN_W, SCREEN_H);
     g.state = STATE_MENU;
+    g.difficulty = DIFF_NORMAL;  
 
-    while (!WindowShouldClose())
-    {
-        float dt = GetFrameTime();
-        if (dt > 0.05f) dt = 0.05f;   /* clamp huge dt spikes */
-
-        /* ── menu entry ── */
-        if (g.state == STATE_MENU) {
-            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) InitGame(&g);
-        } else {
-            UpdateGame(&g, dt);
-        }
-
-        /* ── render into texture ─────────────────────── */
-        BeginTextureMode(screen);
-            ClearBackground((Color){8, 8, 18, 255});   /* very dark navy */
-
-            if (g.state == STATE_MENU) {
-                DrawMenu();
-            } else {
-                /* background grid (subtle) */
-                for (int x = 0; x < SCREEN_W; x += 60)
-                    DrawLine(x, 0, x, SCREEN_H, (Color){255,255,255,8});
-                for (int y = 0; y < SCREEN_H; y += 60)
-                    DrawLine(0, y, SCREEN_W, y, (Color){255,255,255,8});
-
-                /* center line */
-                DrawDashedLine();
-
-                /* arena border glow */
-                DrawRectangleLinesEx((Rectangle){0,0,SCREEN_W,SCREEN_H},
-                                     3, (Color){255,255,255,40});
-                DrawRectangleLinesEx((Rectangle){2,2,SCREEN_W-4,SCREEN_H-4},
-                                     1, (Color){255,255,255,15});
-
-                /* hit flash */
-                if (g.flashTimer > 0) {
-                    float t = g.flashTimer / 0.08f;
-                    DrawRectangle(0,0,SCREEN_W,SCREEN_H,
-                                  (Color){255,255,255,(unsigned char)(t*35)});
-                }
-
-                /* trail + ball */
-                DrawTrail(&g);
-                DrawNeonCircle(g.ball, BALL_SIZE/2.0f, (Color){0,220,255,255}, 6);
-
-                /* paddles */
-                DrawNeonRect(g.p1, (Color){0,220,255,255},  7);
-                DrawNeonRect(g.p2, (Color){255,80,120,255}, 7);
-
-                /* rounded caps on paddles */
-                DrawCircle((int)(g.p1.x + g.p1.width/2),
-                           (int)(g.p1.y), (int)(g.p1.width/2),
-                           (Color){0,220,255,255});
-                DrawCircle((int)(g.p1.x + g.p1.width/2),
-                           (int)(g.p1.y + g.p1.height), (int)(g.p1.width/2),
-                           (Color){0,220,255,255});
-                DrawCircle((int)(g.p2.x + g.p2.width/2),
-                           (int)(g.p2.y), (int)(g.p2.width/2),
-                           (Color){255,80,120,255});
-                DrawCircle((int)(g.p2.x + g.p2.width/2),
-                           (int)(g.p2.y + g.p2.height), (int)(g.p2.width/2),
-                           (Color){255,80,120,255});
-
-                DrawParticles(&g);
-                DrawHUD(&g);
-
-                if (g.state == STATE_PAUSED) DrawPauseOverlay();
-                if (g.state == STATE_WIN)    DrawWinScreen(&g);
-            }
-        EndTextureMode();
-
-        /* ── draw texture to screen with optional shake ─ */
-        BeginDrawing();
-            ClearBackground(BLACK);
-            float ox = 0, oy = 0;
-            if (g.shakeTimer > 0) {
-                float mag = (g.shakeTimer / 0.3f) * 7.0f;
-                ox = (float)(rand() % (int)(mag*2+1)) - mag;
-                oy = (float)(rand() % (int)(mag*2+1)) - mag;
-            }
-            DrawTextureRec(
-                screen.texture,
-                (Rectangle){0, 0, (float)SCREEN_W, -(float)SCREEN_H},
-                (Vector2){ox, oy},
-                WHITE);
-        EndDrawing();
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop(GameUpdateFrame, 0, 1);
+#else
+    SetTargetFPS(TARGET_FPS);
+    while (!WindowShouldClose()) {
+        GameUpdateFrame();
     }
-
     UnloadRenderTexture(screen);
     CloseWindow();
+#endif
     return 0;
 }

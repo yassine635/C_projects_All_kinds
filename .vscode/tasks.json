@@ -4,30 +4,22 @@
     {
       "label": "Universal C/C++ Compiler",
       "type": "shell",
-      "command": "g++",
+      "command": "gcc",
       "args": [
         "${file}",
         "-o",
         "${fileDirname}\\${fileBasenameNoExtension}.exe",
-        
-        // --- INCLUDE PATHS (Where headers are) ---
         "-IC:/raylib/include",
         "-IC:/SDL2/include",
-        // You can add future library include paths right here
-        
-        // --- LIBRARY PATHS (Where .a / .lib files are) ---
         "-LC:/raylib/lib",
         "-LC:/SDL2/lib",
-        // You can add future library lib paths right here
-        
-        // --- LINKER FLAGS (The specific libraries to link) ---
+        "-mconsole",
         "-lraylib",
         "-lSDL2main",
         "-lSDL2",
         "-lopengl32",
         "-lgdi32",
         "-lwinmm"
-        // You can add future library names here (e.g., "-lglfw3")
       ],
       "group": {
         "kind": "build",

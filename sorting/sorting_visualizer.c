@@ -474,7 +474,7 @@ void draw_button(Button *b, bool active, Color normal, Color hover) {
     Color bg = b->hovered ? hover : normal;
     if (active) bg = COL_BTN_ACT;
     DrawRectangleRounded(b->rect, 0.3f, 6, bg);
-    DrawRectangleRoundedLines(b->rect, 0.3f, 6 ,(Color){80,80,100,120}); // Fixed: lineThick then Color
+    DrawRectangleRoundedLines(b->rect, 0.3f, 6,1.0f,(Color){80,80,100,120}); // Fixed: lineThick then Color
     int fw = MeasureText(b->label, 13);
     DrawText(b->label,
              (int)(b->rect.x + b->rect.width/2 - fw/2),
